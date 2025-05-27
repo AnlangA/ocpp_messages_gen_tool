@@ -1,0 +1,10 @@
+[package]
+name = "ocpp_messages_gen_tool"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+convert_case = "0.6.0"
+walkdir = "2.5.0"
