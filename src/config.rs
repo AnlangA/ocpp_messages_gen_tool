@@ -13,7 +13,7 @@ impl Config {
         Self {
             schema_dir: "../tests/schema_validation/schemas/v2.1".to_string(),
             output_dir: "../v2_1/messages".to_string(),
-            generate_mod_file: false, // 不生成 mod.rs，因为现有项目已有
+            generate_mod_file: true, // 默认生成 mod.rs 文件
             show_statistics: true,
         }
     }
@@ -48,6 +48,10 @@ impl Config {
                     config.generate_mod_file = false;
                     i += 1;
                 }
+                "--mod-file" => {
+                    config.generate_mod_file = true;
+                    i += 1;
+                }
                 "--no-stats" => {
                     config.show_statistics = false;
                     i += 1;
@@ -79,6 +83,7 @@ impl Config {
         println!(
             "    --output-dir <DIR>    Output directory (default: ../generated/v2_1/messages)"
         );
+        println!("    --mod-file            Generate mod.rs file (default)");
         println!("    --no-mod-file         Don't generate mod.rs file");
         println!("    --no-stats            Don't show statistics");
         println!("    -h, --help            Print help information");

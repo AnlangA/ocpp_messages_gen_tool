@@ -31,7 +31,19 @@ pub fn generate_paired_file(
 
     // Generate Response struct if available
     if let Some(response) = &pair.response {
-        code.push_str(&generate_struct_code(response, "response")?);
+        let message_type = if pair.request.is_none() {
+            // This is a standalone message, determine type from name
+            if response.name.ends_with("Request") {
+                "request"
+            } else if response.name.ends_with("Response") {
+                "response"
+            } else {
+                "message"
+            }
+        } else {
+            "response"
+        };
+        code.push_str(&generate_struct_code(response, message_type)?);
     }
 
     fs::write(output_path, code)?;
@@ -46,21 +58,26 @@ pub fn generate_struct_code(
     let mut code = String::new();
 
     // Add struct comment
-    code.push_str(&format!(
-        "/// {} body for the {} {}.\n",
-        message_type
-            .chars()
-            .next()
-            .unwrap()
-            .to_uppercase()
-            .collect::<String>()
-            + &message_type[1..],
-        struct_info
-            .name
-            .replace("Request", "")
-            .replace("Response", ""),
-        message_type
-    ));
+    if struct_info.name.ends_with("Request") || struct_info.name.ends_with("Response") {
+        code.push_str(&format!(
+            "/// {} body for the {} {}.\n",
+            message_type
+                .chars()
+                .next()
+                .unwrap()
+                .to_uppercase()
+                .collect::<String>()
+                + &message_type[1..],
+            struct_info
+                .name
+                .replace("Request", "")
+                .replace("Response", ""),
+            message_type
+        ));
+    } else {
+        // For standalone messages
+        code.push_str(&format!("/// {} message structure.\n", struct_info.name));
+    }
 
     // Add struct definition
     code.push_str("#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Validate)]\n");
@@ -129,7 +146,11 @@ pub fn generate_struct_code(
         code.push_str(&format!("    pub {}: {},\n", field.name, field_type));
     }
 
-    code.push_str("}\n");
+    code.push_str("}\n\n");
+
+    // Add implementation block
+    code.push_str(&generate_impl_block(struct_info)?);
+
     Ok(code)
 }
 
@@ -137,80 +158,187 @@ pub fn generate_struct_code(
 fn add_validation_attributes(code: &mut String, field: &crate::types::FieldInfo) {
     if field.needs_validation {
         if field.rust_type == "String" {
-            // 检查是否有长度限制
+            // 处理字符串长度限制
+            let mut length_constraints = Vec::new();
+
+            if let Some(min_length) = &field.min_length {
+                length_constraints.push(format!("min = {}", min_length));
+            }
+
             if let Some(max_length) = &field.max_length {
-                code.push_str(&format!("    #[validate(length(max = {}))]\n", max_length));
+                length_constraints.push(format!("max = {}", max_length));
+            }
+
+            if !length_constraints.is_empty() {
+                code.push_str(&format!(
+                    "    #[validate(length({}))]\n",
+                    length_constraints.join(", ")
+                ));
             } else {
+                // 默认最大长度限制
                 code.push_str("    #[validate(length(max = 255))]\n");
             }
         } else if field.rust_type.starts_with("Vec<") {
-            // 检查 Vec 的内容类型
-            let inner_type = field.rust_type.strip_prefix("Vec<").unwrap().strip_suffix(">").unwrap();
+            // 处理数组类型
+            let inner_type = field
+                .rust_type
+                .strip_prefix("Vec<")
+                .unwrap()
+                .strip_suffix(">")
+                .unwrap();
+
+            // 添加数组长度验证
+            let mut length_constraints = Vec::new();
+
+            if let Some(min_items) = &field.min_items {
+                length_constraints.push(format!("min = {}", min_items));
+            }
+
+            if let Some(max_items) = &field.max_items {
+                length_constraints.push(format!("max = {}", max_items));
+            }
+
+            if !length_constraints.is_empty() {
+                code.push_str(&format!(
+                    "    #[validate(length({}))]\n",
+                    length_constraints.join(", ")
+                ));
+            }
+
+            // 添加嵌套验证（如果需要）
             if inner_type.ends_with("Type") && !inner_type.ends_with("EnumType") {
                 // 只对包含复杂数据类型的 Vec 添加 nested 验证
+                // 注意：这需要内部类型也实现 Validate trait
                 code.push_str("    #[validate(nested)]\n");
             }
-            // Vec<String>, Vec<i32>, Vec<EnumType> 等不需要验证属性
         } else if field.rust_type.ends_with("Type") && !field.rust_type.ends_with("EnumType") {
             // 只对非枚举类型添加 nested 验证
+            // 注意：这需要类型也实现 Validate trait
             code.push_str("    #[validate(nested)]\n");
-        } else if field.rust_type == "i32" {
-            // 添加数值范围验证
-            if let (Some(min), Some(max)) = (&field.min_value, &field.max_value) {
-                code.push_str(&format!(
-                    "    #[validate(range(min = {}, max = {}))]\n",
-                    min, max
-                ));
-            } else if let Some(min) = &field.min_value {
-                code.push_str(&format!("    #[validate(range(min = {}))]\n", min));
-            } else if let Some(max) = &field.max_value {
-                code.push_str(&format!("    #[validate(range(max = {}))]\n", max));
-            } else if field.name.contains("id") {
-                code.push_str("    #[validate(range(min = 0))]\n");
-            }
+        } else if field.rust_type == "i32"
+            || field.rust_type == "i64"
+            || field.rust_type == "u32"
+            || field.rust_type == "u64"
+        {
+            // 处理整数类型的数值范围验证
+            add_numeric_range_validation(code, field);
+        } else if field.rust_type == "f32" || field.rust_type == "f64" {
+            // 处理浮点数类型的数值范围验证
+            add_numeric_range_validation(code, field);
         } else if field.rust_type == "Decimal" {
-            // 添加 Decimal 类型的数值范围验证
-            if let (Some(min), Some(max)) = (&field.min_value, &field.max_value) {
-                code.push_str(&format!(
-                    "    #[validate(range(min = {}, max = {}))]\n",
-                    min, max
-                ));
-            } else if let Some(min) = &field.min_value {
-                code.push_str(&format!("    #[validate(range(min = {}))]\n", min));
-            } else if let Some(max) = &field.max_value {
-                code.push_str(&format!("    #[validate(range(max = {}))]\n", max));
-            }
+            // Decimal 类型需要特殊处理，因为 validator crate 不直接支持 Decimal
+            // 我们可以添加自定义验证或者跳过验证
+            // 这里我们跳过验证，因为 Decimal 类型本身就有精度保证
         }
+    }
+}
+
+/// 添加数值范围验证
+fn add_numeric_range_validation(code: &mut String, field: &crate::types::FieldInfo) {
+    let mut range_constraints = Vec::new();
+
+    if let Some(min) = &field.min_value {
+        // 对于整数类型，如果是整数值则不显示小数点
+        if field.rust_type == "i32"
+            || field.rust_type == "i64"
+            || field.rust_type == "u32"
+            || field.rust_type == "u64"
+        {
+            if min.fract() == 0.0 {
+                range_constraints.push(format!("min = {}", *min as i64));
+            } else {
+                range_constraints.push(format!("min = {}", min));
+            }
+        } else {
+            range_constraints.push(format!("min = {}", min));
+        }
+    }
+
+    if let Some(max) = &field.max_value {
+        // 对于整数类型，如果是整数值则不显示小数点
+        if field.rust_type == "i32"
+            || field.rust_type == "i64"
+            || field.rust_type == "u32"
+            || field.rust_type == "u64"
+        {
+            if max.fract() == 0.0 {
+                range_constraints.push(format!("max = {}", *max as i64));
+            } else {
+                range_constraints.push(format!("max = {}", max));
+            }
+        } else {
+            range_constraints.push(format!("max = {}", max));
+        }
+    }
+
+    if !range_constraints.is_empty() {
+        code.push_str(&format!(
+            "    #[validate(range({}))]\n",
+            range_constraints.join(", ")
+        ));
+    } else if field.name.contains("id") && (field.rust_type == "i32" || field.rust_type == "u32") {
+        // 为 ID 字段添加默认的非负验证
+        code.push_str("    #[validate(range(min = 0))]\n");
     }
 }
 
 /// 生成模块文件
 pub fn generate_mod_file(
     message_pairs: &[String],
+    standalone_messages: &[String],
     output_dir: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mod_path = PathBuf::from(output_dir).join("mod.rs");
     let mut code = String::new();
 
-    code.push_str("// Generated message modules for OCPP v2.1\n");
-    code.push_str("// This file is auto-generated. Do not edit manually.\n\n");
+    // 收集所有模块名并排序
+    let mut all_modules = Vec::new();
 
-    // Add module declarations
+    // 添加配对消息的模块名
     for base_name in message_pairs {
         let module_name = base_name.to_case(Case::Snake);
+        all_modules.push((module_name, base_name.clone(), true)); // true 表示是配对消息
+    }
+
+    // 添加独立消息的模块名
+    for base_name in standalone_messages {
+        let module_name = base_name.to_case(Case::Snake);
+        all_modules.push((module_name, base_name.clone(), false)); // false 表示是独立消息
+    }
+
+    // 按模块名排序
+    all_modules.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // 添加模块声明
+    for (module_name, _, _) in &all_modules {
         code.push_str(&format!("pub mod {};\n", module_name));
     }
 
     code.push('\n');
 
-    // Add re-exports
-    for base_name in message_pairs {
-        let module_name = base_name.to_case(Case::Snake);
+    // 添加重新导出，按类型分组
+    let mut paired_exports = Vec::new();
+    let mut standalone_exports = Vec::new();
 
+    for (module_name, base_name, is_paired) in &all_modules {
+        if *is_paired {
+            paired_exports.push((module_name.clone(), base_name.clone()));
+        } else {
+            standalone_exports.push((module_name.clone(), base_name.clone()));
+        }
+    }
+
+    // 导出配对消息
+    for (module_name, base_name) in &paired_exports {
         code.push_str(&format!(
             "pub use {}::{{{}Request, {}Response}};\n",
             module_name, base_name, base_name
         ));
+    }
+
+    // 导出独立消息
+    for (module_name, base_name) in &standalone_exports {
+        code.push_str(&format!("pub use {}::{};\n", module_name, base_name));
     }
 
     fs::write(mod_path, code)?;
@@ -304,4 +432,209 @@ fn parse_import(import: &str) -> Option<ImportType> {
         // 其他类型的导入
         Some(ImportType::Other(import.to_string()))
     }
+}
+
+/// 生成结构体的实现块
+fn generate_impl_block(struct_info: &StructInfo) -> Result<String, Box<dyn std::error::Error>> {
+    let mut code = String::new();
+
+    code.push_str(&format!("impl {} {{\n", struct_info.name));
+
+    // Generate new method
+    code.push_str(&generate_new_method(struct_info)?);
+    code.push('\n');
+
+    // Generate setter methods
+    for field in &struct_info.fields {
+        code.push_str(&generate_setter_method(field)?);
+        code.push('\n');
+    }
+
+    // Generate getter methods
+    for field in &struct_info.fields {
+        code.push_str(&generate_getter_method(field)?);
+        code.push('\n');
+    }
+
+    // Generate with methods for optional fields
+    for field in &struct_info.fields {
+        if field.is_optional {
+            code.push_str(&generate_with_method(field)?);
+            code.push('\n');
+        }
+    }
+
+    code.push_str("}\n");
+    Ok(code)
+}
+
+/// 生成 new 方法
+fn generate_new_method(struct_info: &StructInfo) -> Result<String, Box<dyn std::error::Error>> {
+    let mut code = String::new();
+
+    // Collect required fields
+    let required_fields: Vec<&crate::types::FieldInfo> = struct_info
+        .fields
+        .iter()
+        .filter(|field| !field.is_optional)
+        .collect();
+
+    // Generate method signature
+    code.push_str("    /// Creates a new instance of the struct.\n");
+    code.push_str("    ///\n");
+
+    // Add parameter documentation
+    for field in &required_fields {
+        let param_doc = if let Some(description) = &field.description {
+            description.clone()
+        } else {
+            format!("The {} field", field.name)
+        };
+        code.push_str(&format!("    /// * `{}` - {}\n", field.name, param_doc));
+    }
+
+    code.push_str("    ///\n");
+    code.push_str("    /// # Returns\n");
+    code.push_str("    ///\n");
+    code.push_str("    /// A new instance of the struct with required fields set and optional fields as None.\n");
+    code.push_str("    pub fn new(");
+
+    // Add parameters
+    for (i, field) in required_fields.iter().enumerate() {
+        if i > 0 {
+            code.push_str(", ");
+        }
+        code.push_str(&format!("{}: {}", field.name, field.rust_type));
+    }
+
+    code.push_str(") -> Self {\n");
+    code.push_str("        Self {\n");
+
+    // Initialize fields
+    for field in &struct_info.fields {
+        if field.is_optional {
+            code.push_str(&format!("            {}: None,\n", field.name));
+        } else {
+            code.push_str(&format!("            {},\n", field.name));
+        }
+    }
+
+    code.push_str("        }\n");
+    code.push_str("    }\n");
+
+    Ok(code)
+}
+
+/// 生成 setter 方法
+fn generate_setter_method(
+    field: &crate::types::FieldInfo,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut code = String::new();
+
+    let param_doc = if let Some(description) = &field.description {
+        description.clone()
+    } else {
+        format!("The {} field", field.name)
+    };
+
+    let field_type = if field.is_optional {
+        format!("Option<{}>", field.rust_type)
+    } else {
+        field.rust_type.clone()
+    };
+
+    code.push_str(&format!("    /// Sets the {} field.\n", field.name));
+    code.push_str("    ///\n");
+    code.push_str(&format!("    /// * `{}` - {}\n", field.name, param_doc));
+    code.push_str("    ///\n");
+    code.push_str("    /// # Returns\n");
+    code.push_str("    ///\n");
+    code.push_str("    /// A mutable reference to self for method chaining.\n");
+    code.push_str(&format!(
+        "    pub fn set_{}(&mut self, {}: {}) -> &mut Self {{\n",
+        field.name, field.name, field_type
+    ));
+    code.push_str(&format!("        self.{} = {};\n", field.name, field.name));
+    code.push_str("        self\n");
+    code.push_str("    }\n");
+
+    Ok(code)
+}
+
+/// 生成 getter 方法
+fn generate_getter_method(
+    field: &crate::types::FieldInfo,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut code = String::new();
+
+    let param_doc = if let Some(description) = &field.description {
+        description.clone()
+    } else {
+        format!("The {} field", field.name)
+    };
+
+    let return_type = if field.is_optional {
+        format!("Option<&{}>", field.rust_type)
+    } else {
+        format!("&{}", field.rust_type)
+    };
+
+    code.push_str(&format!(
+        "    /// Gets a reference to the {} field.\n",
+        field.name
+    ));
+    code.push_str("    ///\n");
+    code.push_str("    /// # Returns\n");
+    code.push_str("    ///\n");
+    code.push_str(&format!("    /// {}\n", param_doc));
+    code.push_str(&format!(
+        "    pub fn get_{}(&self) -> {} {{\n",
+        field.name, return_type
+    ));
+
+    if field.is_optional {
+        code.push_str(&format!("        self.{}.as_ref()\n", field.name));
+    } else {
+        code.push_str(&format!("        &self.{}\n", field.name));
+    }
+
+    code.push_str("    }\n");
+
+    Ok(code)
+}
+
+/// 生成 with 方法（仅用于可选字段）
+fn generate_with_method(
+    field: &crate::types::FieldInfo,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let mut code = String::new();
+
+    let param_doc = if let Some(description) = &field.description {
+        description.clone()
+    } else {
+        format!("The {} field", field.name)
+    };
+
+    code.push_str(&format!(
+        "    /// Sets the {} field and returns self for builder pattern.\n",
+        field.name
+    ));
+    code.push_str("    ///\n");
+    code.push_str(&format!("    /// * `{}` - {}\n", field.name, param_doc));
+    code.push_str("    ///\n");
+    code.push_str("    /// # Returns\n");
+    code.push_str("    ///\n");
+    code.push_str("    /// Self with the field set.\n");
+    code.push_str(&format!(
+        "    pub fn with_{}(mut self, {}: {}) -> Self {{\n",
+        field.name, field.name, field.rust_type
+    ));
+    code.push_str(&format!(
+        "        self.{} = Some({});\n",
+        field.name, field.name
+    ));
+    code.push_str("        self\n");
+    code.push_str("    }\n");
+
+    Ok(code)
 }

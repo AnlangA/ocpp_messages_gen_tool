@@ -125,10 +125,26 @@ fn extract_field_info(
         .and_then(|v| v.as_u64())
         .map(|v| v as u32);
 
-    // 提取数值范围
-    let min_value = field_schema.get("minimum").and_then(|v| v.as_i64());
+    let min_length = field_schema
+        .get("minLength")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
 
-    let max_value = field_schema.get("maximum").and_then(|v| v.as_i64());
+    // 提取数值范围（支持浮点数）
+    let min_value = field_schema.get("minimum").and_then(|v| v.as_f64());
+
+    let max_value = field_schema.get("maximum").and_then(|v| v.as_f64());
+
+    // 提取数组项目数量限制
+    let min_items = field_schema
+        .get("minItems")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
+
+    let max_items = field_schema
+        .get("maxItems")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as u32);
 
     Ok(FieldInfo {
         name: rust_field_name,
@@ -138,8 +154,11 @@ fn extract_field_info(
         needs_validation,
         description,
         max_length,
+        min_length,
         min_value,
         max_value,
+        min_items,
+        max_items,
     })
 }
 
@@ -168,7 +187,7 @@ fn determine_rust_type(
             "integer" => Ok(("i32".to_string(), true)),
             "number" => {
                 imports.insert("use rust_decimal::Decimal;".to_string());
-                Ok(("Decimal".to_string(), false))
+                Ok(("Decimal".to_string(), true))
             }
             "boolean" => Ok(("bool".to_string(), false)),
             "array" => {
@@ -203,7 +222,10 @@ fn handle_ref_type(
         let (rust_type, needs_validation) = match type_name.as_str() {
             // Special cases that need specific handling
             "DERControlStatusEnumType" => {
-                imports.insert("use crate::v2_1::enumerations::der_control::DERControlStatusEnumType;".to_string());
+                imports.insert(
+                    "use crate::v2_1::enumerations::der_control::DERControlStatusEnumType;"
+                        .to_string(),
+                );
                 (type_name.clone(), false)
             }
             "EventDataType" => {
@@ -216,15 +238,24 @@ fn handle_ref_type(
                 (type_name.clone(), true)
             }
             // 常见的数据类型
-            "CustomDataType" | "StatusInfoType" | "IdTokenType" | "IdTokenInfoType" |
-            "EVSEType" | "TariffType" | "OCSPRequestDataType" => {
+            "CustomDataType"
+            | "StatusInfoType"
+            | "IdTokenType"
+            | "IdTokenInfoType"
+            | "EVSEType"
+            | "TariffType"
+            | "OCSPRequestDataType" => {
                 imports.insert(format!("use crate::v2_1::datatypes::{};", type_name));
                 (type_name.clone(), true)
             }
             // 常见的枚举类型
-            "GenericStatusEnumType" | "AuthorizeCertificateStatusEnumType" |
-            "EnergyTransferModeEnumType" | "ResetEnumType" | "ResetStatusEnumType" |
-            "MessageTriggerEnumType" | "TriggerMessageStatusEnumType" => {
+            "GenericStatusEnumType"
+            | "AuthorizeCertificateStatusEnumType"
+            | "EnergyTransferModeEnumType"
+            | "ResetEnumType"
+            | "ResetStatusEnumType"
+            | "MessageTriggerEnumType"
+            | "TriggerMessageStatusEnumType" => {
                 imports.insert(format!("use crate::v2_1::enumerations::{};", type_name));
                 (type_name.clone(), false)
             }
@@ -249,7 +280,9 @@ fn handle_ref_type(
 }
 
 /// 从原始JSON内容中提取properties字段的顺序
-fn extract_field_order_from_content(content: &str) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+fn extract_field_order_from_content(
+    content: &str,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let mut field_order = Vec::new();
 
     // 使用正则表达式方法来查找最后一个properties对象中的字段

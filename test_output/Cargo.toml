@@ -1,0 +1,10 @@
+[package]
+name = "test_constraints"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+validator = { version = "0.16", features = ["derive"] }
+rust_decimal = "1.32"
+chrono = { version = "0.4", features = ["serde"] }

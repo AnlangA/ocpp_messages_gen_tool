@@ -10,8 +10,11 @@ pub struct FieldInfo {
     pub needs_validation: bool,
     pub description: Option<String>,
     pub max_length: Option<u32>,
-    pub min_value: Option<i64>,
-    pub max_value: Option<i64>,
+    pub min_length: Option<u32>,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub min_items: Option<u32>,
+    pub max_items: Option<u32>,
 }
 
 /// 表示一个结构体的信息
@@ -53,5 +56,10 @@ impl MessagePair {
 
     pub fn is_complete(&self) -> bool {
         self.request.is_some() && self.response.is_some()
+    }
+
+    pub fn has_standalone_message(&self) -> bool {
+        (self.request.is_some() && self.response.is_none())
+            || (self.request.is_none() && self.response.is_some())
     }
 }

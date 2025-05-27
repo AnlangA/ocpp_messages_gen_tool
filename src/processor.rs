@@ -29,13 +29,19 @@ impl SchemaProcessor {
         // Collect all JSON files and group them by base name
         let message_pairs = self.collect_message_pairs()?;
 
-        // Generate paired files
+        // Generate paired files and standalone messages
         let mut generated_pairs = Vec::new();
+        let mut standalone_messages = Vec::new();
         for (base_name, pair) in &message_pairs {
             if pair.is_complete() {
                 generate_paired_file(pair, &self.config.output_dir)?;
                 generated_pairs.push(base_name.clone());
                 println!("Generated: {}", base_name);
+            } else if pair.has_standalone_message() {
+                // Generate standalone message
+                generate_paired_file(pair, &self.config.output_dir)?;
+                standalone_messages.push(base_name.clone());
+                println!("Generated standalone: {}", base_name);
             } else {
                 println!("Warning: Incomplete pair for {}", base_name);
             }
@@ -43,7 +49,11 @@ impl SchemaProcessor {
 
         // Generate mod.rs file if enabled
         if self.config.generate_mod_file {
-            generate_mod_file(&generated_pairs, &self.config.output_dir)?;
+            generate_mod_file(
+                &generated_pairs,
+                &standalone_messages,
+                &self.config.output_dir,
+            )?;
             println!("Generated mod.rs file");
         }
 

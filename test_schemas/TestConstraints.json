@@ -1,0 +1,69 @@
+{
+    "$schema": "http://json-schema.org/draft-06/schema#",
+    "$id": "urn:OCPP:Cp:2:2025:1:TestConstraints",
+    "comment": "Test schema for constraint validation",
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+        "stringWithMinMax": {
+            "description": "String with both min and max length constraints",
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 50
+        },
+        "stringWithMinOnly": {
+            "description": "String with only min length constraint",
+            "type": "string",
+            "minLength": 10
+        },
+        "stringWithMaxOnly": {
+            "description": "String with only max length constraint",
+            "type": "string",
+            "maxLength": 100
+        },
+        "arrayWithMinMax": {
+            "description": "Array with both min and max items constraints",
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "minItems": 2,
+            "maxItems": 10
+        },
+        "arrayWithMinOnly": {
+            "description": "Array with only min items constraint",
+            "type": "array",
+            "items": {
+                "type": "integer"
+            },
+            "minItems": 1
+        },
+        "integerWithRange": {
+            "description": "Integer with min and max constraints",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+        },
+        "numberWithRange": {
+            "description": "Number with min and max constraints",
+            "type": "number",
+            "minimum": 0.5,
+            "maximum": 99.9
+        },
+        "optionalField": {
+            "description": "Optional field with constraints",
+            "type": "string",
+            "minLength": 3,
+            "maxLength": 20
+        }
+    },
+    "required": [
+        "stringWithMinMax",
+        "stringWithMinOnly", 
+        "stringWithMaxOnly",
+        "arrayWithMinMax",
+        "arrayWithMinOnly",
+        "integerWithRange",
+        "numberWithRange"
+    ]
+}
